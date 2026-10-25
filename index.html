@@ -68,7 +68,7 @@ var R = [];               // radii in px, recomputed on resize
 var balls = [];           // {x,y,vx,vy,r,tier,dt}
 var parts = [];           // particles
 var rings = [];           // expanding merge rings
-var score = 0, best = 0, gameOver = false;
+var score = 0, best = 0, gameOver = false, pops = 0;
 var curTier = 0, nextTier = 0;
 var aimX = 200, dragging = false, dropCd = 0;
 var lineY = 170, shake = 0, muted = false, introT = 0;
@@ -409,6 +409,7 @@ function doMerge(A, B){
 
   if (t === TIERS.length - 1) {
     score += FINAL_POP;
+    pops++;
     shake = 14;
     burst(cx, cy, t, 90, 720);
     rings.push({x:cx, y:cy, r:R[t]*1.4, life:0, max:0.7, col:'#ffffff', w:5});
@@ -791,7 +792,7 @@ window.__orbita = {
     return {score:score, over:gameOver, n:balls.length,
             tiers:balls.map(function(b){return b.tier;}), W:W, H:H,
             lineY:lineY, parts:parts.length, radii:R.slice(),
-            skin:SKIN, faces:faceImgs.filter(Boolean).length,
+            pops:pops, skin:SKIN, faces:faceImgs.filter(Boolean).length,
             next:nextTier, cur:curTier, backdrop: !!backdropImg, muted: muted};
   },
   dropAt: function(x){ aimX = x; dropCd = 0; drop(); },
