@@ -74,7 +74,21 @@ var aimX = 200, dragging = false, dropCd = 0;
 var lineY = 170, shake = 0, muted = false, introT = 0, canVibrate = false;
 var ac = null;
 
-try { best = parseInt(localStorage.getItem('orbita_best') || '0', 10) || 0; } catch(e){}
+function bestGet(){
+  try {
+    if (window.NativeStore) return parseInt(window.NativeStore.get('orbita_best'), 10) || 0;
+    return parseInt(localStorage.getItem('orbita_best') || '0', 10) || 0;
+  } catch(e) { return 0; }
+}
+
+function bestSet(v){
+  try {
+    if (window.NativeStore) window.NativeStore.set('orbita_best', String(v));
+    else localStorage.setItem('orbita_best', String(v));
+  } catch(e) {}
+}
+
+best = bestGet();
 
 function randTier(){
   var a = TUNE.ramp[0], b = TUNE.ramp[1];
@@ -474,7 +488,7 @@ function frame(ts){
     checkOver(dt);
     if (score > best) {
       best = score;
-      try { localStorage.setItem('orbita_best', String(best)); } catch(e){}
+      bestSet(best);
     }
   }
 
@@ -520,7 +534,7 @@ function drawBall(x, y, r, tier, alpha, sq, pop){
 var sweepGrad = null, fireGrad = null, smokeGrad = null;
 var fpsAvg = 60, lowQ = 0;
 
-var fx = { t: 0, embers: [], flashes: [] };
+var fx = { t: 0, tension: 0, embers: [], flashes: [] };
 
 function newEmber(spread){
   return {
@@ -540,17 +554,30 @@ function initFx(){
   for (var i = 0; i < n; i++) fx.embers.push(newEmber(true));
 }
 
+function updateTension(dt){
+  var top = H, i;
+  for (i = 0; i < balls.length; i++) {
+    var b = balls[i];
+    if (b.y - b.r < top) top = b.y - b.r;
+  }
+  var span = (H * 0.74) - lineY;
+  var t = ((H * 0.74) - top) / (span > 1 ? span : 1);
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  fx.tension += (t - fx.tension) * Math.min(1, dt * 1.8);
+}
+
 function updateFx(dt){
   fx.t += dt;
+  updateTension(dt);
   var i;
   var step = lowQ >= 2 ? 2 : 1;
   for (i = 0; i < fx.embers.length; i += step){
     var e = fx.embers[i];
-    e.y -= e.vy * dt;
+    e.y -= e.vy * (1 + fx.tension * 0.8) * dt;
     e.x += Math.sin(fx.t * e.swaySpd + e.sway) * 10 * dt;
     if (e.y < H * 0.30) { fx.embers[i] = newEmber(false); }
   }
-  if (fx.flashes.length === 0 && Math.random() < dt * 0.16) {
+  if (fx.flashes.length === 0 && Math.random() < dt * (0.14 + fx.tension * 0.75)) {
     fx.flashes.push({x: W * (0.15 + Math.random() * 0.7), y: H * (0.30 + Math.random() * 0.5),
                      life: 0, max: 0.55 + Math.random() * 0.35, r: W * (0.18 + Math.random() * 0.22)});
   }
@@ -568,7 +595,7 @@ function drawFx(){
     var sx = ((fx.t * 6) % (W * 2.0)) - sw * 0.9;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.045;
+    ctx.globalAlpha = 0.045 + fx.tension * 0.075;
     ctx.drawImage(smokeGrad, sx, H * 0.36, sw, sw);
     ctx.restore();
   }
@@ -576,9 +603,11 @@ function drawFx(){
   if (fireGrad && lowQ < 2) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    var fl = 0.55 + 0.30 * Math.sin(fx.t * 2.7) + 0.15 * Math.sin(fx.t * 7.3 + 1.7);
-    ctx.globalAlpha = Math.max(0.05, fl * 0.22);
-    ctx.drawImage(fireGrad, 0, H - H * 0.20, W, H * 0.20);
+    var spd = 2.7 + fx.tension * 3.4;
+    var fl = 0.55 + 0.30 * Math.sin(fx.t * spd) + 0.15 * Math.sin(fx.t * (spd * 2.6) + 1.7);
+    ctx.globalAlpha = Math.max(0.05, fl * (0.22 + fx.tension * 0.42));
+    var hh = H * (0.20 + fx.tension * 0.16);
+    ctx.drawImage(fireGrad, 0, H - hh, W, hh);
     ctx.restore();
   }
   // braci
@@ -588,7 +617,7 @@ function drawFx(){
   for (i = 0; i < fx.embers.length; i += step){
     var e = fx.embers[i];
     var fade = Math.min(1, (e.y - H * 0.30) / (H * 0.25));
-    ctx.globalAlpha = e.a * Math.max(0, fade);
+    ctx.globalAlpha = e.a * Math.max(0, fade) * (1 + fx.tension * 0.55);
     ctx.fillStyle = i % 3 === 0 ? '#ffd9a0' : '#ff8a3d';
     ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, 6.2832); ctx.fill();
   }
@@ -995,7 +1024,7 @@ window.__orbita = {
     return {score:score, over:gameOver, n:balls.length,
             tiers:balls.map(function(b){return b.tier;}), W:W, H:H,
             lineY:lineY, parts:parts.length, radii:R.slice(),
-            pops:pops, skin:SKIN, faces:faceImgs.filter(Boolean).length,
+            pops:pops, tension:+fx.tension.toFixed(3), skin:SKIN, faces:faceImgs.filter(Boolean).length,
             next:nextTier, cur:curTier, backdrop: !!backdropImg, muted: muted};
   },
   dropAt: function(x){ aimX = x; dropCd = 0; drop(); },
