@@ -71,7 +71,7 @@ var rings = [];           // expanding merge rings
 var score = 0, best = 0, gameOver = false, pops = 0;
 var curTier = 0, nextTier = 0;
 var aimX = 200, dragging = false, dropCd = 0;
-var lineY = 170, shake = 0, muted = false, introT = 0;
+var lineY = 170, shake = 0, muted = false, introT = 0, canVibrate = false;
 var ac = null;
 
 try { best = parseInt(localStorage.getItem('orbita_best') || '0', 10) || 0; } catch(e){}
@@ -111,6 +111,8 @@ function computeLayout(){
   aimX = Math.max(R[curTier], Math.min(aimX, W - R[curTier]));
   buildSprites();
   buildBg();
+  buildFxGrads();
+  initFx();
   sweepGrad = null;
 }
 
@@ -222,6 +224,14 @@ function buildBg(){
     g.fillStyle = wash; g.fillRect(0, 0, W, H);
   }
 
+  // bagliore del fuoco, cotto nello sfondo
+  var fireBaked = g.createRadialGradient(W * 0.5, H * 1.0, 0, W * 0.5, H * 1.0, H * 0.62);
+  fireBaked.addColorStop(0, 'rgba(255,150,60,0.30)');
+  fireBaked.addColorStop(0.45, 'rgba(226,96,32,0.12)');
+  fireBaked.addColorStop(1, 'rgba(120,30,10,0)');
+  g.fillStyle = fireBaked;
+  g.fillRect(0, H * 0.38, W, H * 0.62);
+
   // braci dal basso
   var stg = g.createRadialGradient(W * 0.5, H * 1.02, 0, W * 0.5, H * 1.02, H * 0.55);
   stg.addColorStop(0, 'rgba(255,140,60,0.14)');
@@ -271,6 +281,11 @@ function reset(){
 }
 
 /* ---------------------------------------------------------------- audio */
+function buzz(pattern){
+  if (!canVibrate || !navigator.vibrate) return;
+  try { navigator.vibrate(pattern); } catch(e){}
+}
+
 function audioOn(){
   if (ac) return;
   try {
@@ -406,6 +421,7 @@ function doMerge(A, B){
   shake = Math.min(shake + 2 + t, 10);
   burst(cx, cy, t, 10 + t * 4, 220 + t * 45);
   blip(t + 1, 0.10 + t * 0.012);
+  buzz(t >= 4 ? 16 : 7);
 
   if (t === TIERS.length - 1) {
     score += FINAL_POP;
@@ -428,7 +444,11 @@ function checkOver(dt){
     if (b.age < 0.8) { b.dt = 0; continue; }
     if (b.y - b.r < lineY - 2) b.dt += dt;
     else b.dt = Math.max(0, b.dt - dt * 2.5);
-    if (b.dt > 1.2) { gameOver = true; return; }
+    if (b.dt > 1.2) {
+      gameOver = true;
+      buzz([40, 70, 120]);
+      return;
+    }
   }
 }
 
@@ -440,6 +460,10 @@ function frame(ts){
   var dt = Math.min((ts - last) / 1000, 0.05);
   last = ts;
 
+  fpsAvg = fpsAvg * 0.94 + (1 / Math.max(dt, 0.004)) * 0.06;
+  lowQ = fpsAvg < 26 ? 2 : (fpsAvg < 42 ? 1 : 0);
+
+  updateFx(dt);
   if (!gameOver) {
     acc += dt;
     var guard = 0;
@@ -493,7 +517,148 @@ function drawBall(x, y, r, tier, alpha, sq, pop){
   ctx.globalAlpha = 1;
 }
 
-var sweepGrad = null;
+var sweepGrad = null, fireGrad = null, smokeGrad = null;
+var fpsAvg = 60, lowQ = 0;
+
+var fx = { t: 0, embers: [], flashes: [] };
+
+function newEmber(spread){
+  return {
+    x: Math.random() * W,
+    y: spread ? Math.random() * H : H + 6 + Math.random() * 40,
+    r: 0.9 + Math.random() * 2.2,
+    vy: 8 + Math.random() * 26,
+    sway: Math.random() * 6.2832,
+    swaySpd: 0.6 + Math.random() * 1.4,
+    a: 0.12 + Math.random() * 0.42
+  };
+}
+
+function initFx(){
+  fx.t = 0; fx.embers = []; fx.flashes = [];
+  var n = Math.round(34 + W * 0.035);
+  for (var i = 0; i < n; i++) fx.embers.push(newEmber(true));
+}
+
+function updateFx(dt){
+  fx.t += dt;
+  var i;
+  var step = lowQ >= 2 ? 2 : 1;
+  for (i = 0; i < fx.embers.length; i += step){
+    var e = fx.embers[i];
+    e.y -= e.vy * dt;
+    e.x += Math.sin(fx.t * e.swaySpd + e.sway) * 10 * dt;
+    if (e.y < H * 0.30) { fx.embers[i] = newEmber(false); }
+  }
+  if (fx.flashes.length === 0 && Math.random() < dt * 0.16) {
+    fx.flashes.push({x: W * (0.15 + Math.random() * 0.7), y: H * (0.30 + Math.random() * 0.5),
+                     life: 0, max: 0.55 + Math.random() * 0.35, r: W * (0.18 + Math.random() * 0.22)});
+  }
+  for (i = fx.flashes.length - 1; i >= 0; i--){
+    fx.flashes[i].life += dt;
+    if (fx.flashes[i].life > fx.flashes[i].max) fx.flashes.splice(i, 1);
+  }
+}
+
+function drawFx(){
+  var i;
+  // fumo che scorre (un solo passaggio, basso costo)
+  if (smokeGrad && lowQ < 2) {
+    var sw = W * 0.85;
+    var sx = ((fx.t * 6) % (W * 2.0)) - sw * 0.9;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.045;
+    ctx.drawImage(smokeGrad, sx, H * 0.36, sw, sw);
+    ctx.restore();
+  }
+  // sfarfallio del fuoco: solo una fascia in basso
+  if (fireGrad && lowQ < 2) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    var fl = 0.55 + 0.30 * Math.sin(fx.t * 2.7) + 0.15 * Math.sin(fx.t * 7.3 + 1.7);
+    ctx.globalAlpha = Math.max(0.05, fl * 0.22);
+    ctx.drawImage(fireGrad, 0, H - H * 0.20, W, H * 0.20);
+    ctx.restore();
+  }
+  // braci
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  var step = lowQ >= 2 ? 2 : 1;
+  for (i = 0; i < fx.embers.length; i += step){
+    var e = fx.embers[i];
+    var fade = Math.min(1, (e.y - H * 0.30) / (H * 0.25));
+    ctx.globalAlpha = e.a * Math.max(0, fade);
+    ctx.fillStyle = i % 3 === 0 ? '#ffd9a0' : '#ff8a3d';
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, 6.2832); ctx.fill();
+  }
+  ctx.restore();
+  // lampi lontani
+  for (i = 0; i < fx.flashes.length; i++){
+    var f = fx.flashes[i], k = f.life / f.max;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = Math.sin(Math.PI * k) * 0.30;
+    ctx.drawImage(flashGrad, f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+    ctx.restore();
+  }
+}
+
+function buildFxGrads(){
+  fireGrad = null; smokeGrad = null;
+  var fg = document.createElement('canvas');
+  fg.width = Math.round(W * 0.5); fg.height = Math.round(H * 0.18);
+  var c = fg.getContext('2d');
+  var g = c.createRadialGradient(fg.width * 0.5, fg.height, 0, fg.width * 0.5, fg.height, fg.height * 1.15);
+  g.addColorStop(0, 'rgba(255,150,60,1)');
+  g.addColorStop(0.45, 'rgba(220,90,30,0.45)');
+  g.addColorStop(1, 'rgba(120,30,10,0)');
+  c.fillStyle = g; c.fillRect(0, 0, fg.width, fg.height);
+  fireGrad = fg;
+
+  var sm = document.createElement('canvas');
+  sm.width = Math.round(W * 0.7); sm.height = Math.round(W * 0.7);
+  var c2 = sm.getContext('2d');
+  var g2 = c2.createRadialGradient(sm.width/2, sm.height/2, 0, sm.width/2, sm.height/2, sm.width/2);
+  g2.addColorStop(0, 'rgba(150,150,175,1)');
+  g2.addColorStop(0.55, 'rgba(110,110,135,0.35)');
+  g2.addColorStop(1, 'rgba(80,80,100,0)');
+  c2.fillStyle = g2; c2.fillRect(0, 0, sm.width, sm.height);
+  smokeGrad = sm;
+
+  // lastra HUD preregistrata
+  var hp = document.createElement('canvas');
+  hp.width = Math.round(W); hp.height = Math.round(H * 0.105);
+  var hc = hp.getContext('2d');
+  var hg = hc.createLinearGradient(0, 0, 0, hp.height);
+  hg.addColorStop(0, 'rgba(4,5,11,0.88)');
+  hg.addColorStop(0.72, 'rgba(4,5,11,0.55)');
+  hg.addColorStop(1, 'rgba(4,5,11,0)');
+  hc.fillStyle = hg; hc.fillRect(0, 0, hp.width, hp.height);
+  hudPlate = hp;
+
+  // ombra di contatto
+  var ss = document.createElement('canvas');
+  ss.width = 128; ss.height = 40;
+  var sc2 = ss.getContext('2d');
+  var sg = sc2.createRadialGradient(64, 20, 0, 64, 20, 64);
+  sg.addColorStop(0, 'rgba(0,0,0,0.75)');
+  sg.addColorStop(0.55, 'rgba(0,0,0,0.35)');
+  sg.addColorStop(1, 'rgba(0,0,0,0)');
+  sc2.setTransform(1, 0, 0, 0.32, 0, 13.6);
+  sc2.fillStyle = sg; sc2.beginPath(); sc2.arc(64, 20, 64, 0, 6.2832); sc2.fill();
+  shadowSprite = ss;
+
+  // lampo
+  var fl = document.createElement('canvas');
+  fl.width = fl.height = 128;
+  var fc = fl.getContext('2d');
+  var fgd = fc.createRadialGradient(64, 64, 0, 64, 64, 64);
+  fgd.addColorStop(0, 'rgba(255,190,110,1)');
+  fgd.addColorStop(1, 'rgba(255,120,40,0)');
+  fc.fillStyle = fgd; fc.fillRect(0, 0, 128, 128);
+  flashGrad = fl;
+}
 
 function drawSweep(){
   if (!backdropImg) return;
@@ -519,6 +684,39 @@ function drawSweep(){
   ctx.moveTo(cx, cy);
   ctx.lineTo(cx + Math.cos(a0) * rad, cy + Math.sin(a0) * rad);
   ctx.stroke();
+  ctx.restore();
+}
+
+var hudPlate = null, shadowSprite = null, flashGrad = null;
+
+function drawHudPlate(){
+  if (hudPlate) ctx.drawImage(hudPlate, 0, 0, W, H * 0.105);
+}
+
+function drawContactShadows(){
+  ctx.save();
+  for (var i = 0; i < balls.length; i++){
+    var b = balls[i];
+    var gap = H - (b.y + b.r);
+    if (gap > 34) continue;
+    var k = Math.max(0, 1 - gap / 34);
+    ctx.globalAlpha = 0.5 * k;
+    var sw = b.r * 2.4, sh = b.r * 0.75;
+    ctx.drawImage(shadowSprite, b.x - sw / 2, H - sh * 0.55, sw, sh);
+  }
+  ctx.restore();
+}
+
+function drawFrameEdge(){
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.075)';
+  ctx.lineWidth = 2;
+  var r = 14;
+  if (ctx.roundRect) {
+    ctx.beginPath(); ctx.roundRect(1, 1, W - 2, H - 2, r); ctx.stroke();
+  } else {
+    ctx.strokeRect(1, 1, W - 2, H - 2);
+  }
   ctx.restore();
 }
 
@@ -574,7 +772,9 @@ function render(){
   }
 
   if (bgLayer) ctx.drawImage(bgLayer, 0, 0, W, H);
+  drawFx();
   drawSweep();
+  drawHudPlate();
 
   var dl = ctx.createLinearGradient(0, lineY - 26, 0, lineY);
   dl.addColorStop(0, 'rgba(255,80,110,0)');
@@ -605,6 +805,7 @@ function render(){
 
   if (!gameOver) drawNextPanel();
 
+  drawContactShadows();
   for (i = 0; i < balls.length; i++) {
     var b = balls[i];
     drawBall(b.x, b.y, b.r, b.tier, 1, b.sq, b.pop);
@@ -696,6 +897,7 @@ function render(){
 
   drawCredit();
   if (!gameOver) drawSoundPill();
+  drawFrameEdge();
 
   if (gameOver) {
     ctx.fillStyle = 'rgba(4,5,11,0.80)';
@@ -745,6 +947,7 @@ function drop(){
 
 cv.addEventListener('pointerdown', function(e){
   e.preventDefault();
+  canVibrate = true;
   audioOn();
   if (ac && ac.state === 'suspended') ac.resume();
   if (gameOver) { reset(); return; }
